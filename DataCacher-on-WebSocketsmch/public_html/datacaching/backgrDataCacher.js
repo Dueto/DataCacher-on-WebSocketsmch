@@ -1,27 +1,40 @@
 
 importScripts('../librarys/RGraph.common.core.js');
 importScripts('../librarys/RGraph.common.csv.js');
+importScripts('../librarys/dataStream.js');
 importScripts('./webSockets.js');
 
 self.addEventListener('message', function(e)
 {
     var data = e.data.split('<>');
-    startBackgroundCaching(data[0], data[1], data[2], data[3], data[4], data[5], data[6]);
+    db_server = data[0];
+    db_name = data[1];
+    db_group = data[2];
+    window = data[3];
+    level = data[4];
+    tableColumns = data[5];
+    tableName = data[6];
+    maxLevel = data[7];
+    db_items = data[8];
+    labels = data[9];
+    dataLevels = data[10];
+    startBackgroundCaching();
 });
 
 db = openDatabase('DB', '1.0', '', 50 * 1024 * 1024);
 socket = webSockets('ws://localhost:12345');
 
-startBackgroundCaching = function(db_server,
-        db_name,
-        db_group,
-        window,
-        level,
-        tableColumns,
-        tableName)
+
+startBackgroundCaching = function()
 {
+    channelCount = tableColumns.split(',').length - 1;
     socket.openSocket();
-    console.log(socket.socket);
+    socket.setOnOpenCallback(function()
+    {
+        socket.setOnMessageCallback(onMessageRecieved);
+        socket.sendMessage(tableName + '<>' + window + '<>' + '1' + '<>' + 'mean');
+    });
+
 
 };
 
@@ -35,7 +48,7 @@ function onReadyFormingData(objData)
         //var objData = parseData(csv);
         if (objData.dateTime.length != 0)
         {
-            if (objData.data[0].length < 50000)
+            if (objData.data[0].length < 20000)
             {
                 var idDataSource;
                 req.executeSql('SELECT id FROM DataSource WHERE db_server = "' + db_server + '" AND \n\
@@ -55,7 +68,7 @@ function onReadyFormingData(objData)
                     }
                     else
                     {
-                        req.executeSql('INSERT OR REPLACE INTO DataSource (db_server, db_name, db_group, level ) VALUES ("' + db_server + '","' + db_name + '","' + db_group + '","' + level + '")');
+                        req.executeSql('INSERT OR REPLACE INTO DataSource (db_server, db_name, db_group, level, db_items, maxlevel, labels, datalevels) VALUES ("' + db_server + '","' + db_name + '","' + db_group + '","' + level + '","' + db_items + '","' + maxLevel + '","' + labels + '","' + dataLevels + '")');
                         req.executeSql('SELECT id FROM DataSource WHERE db_server = "' + db_server + '" AND \n\
                                                    db_name = "' + db_name + '" AND \n\
                                                    db_group = "' + db_group + '" AND \n\
@@ -75,13 +88,13 @@ function onReadyFormingData(objData)
             }
             else
             {
-                // self.close();
+                self.close();
 
             }
         }
         else
         {
-            //self.close();
+            self.close();
         }
     },
             onError,
@@ -94,7 +107,6 @@ function onReadyFormingData(objData)
 
 function onReadyWork()
 {
-    console.log("reade");
     //self.close();
 }
 ;
@@ -107,7 +119,6 @@ function onErrorWork(err)
 
 function onReadyTransaction()
 {
-    console.log("reade");
     //self.close();
 }
 ;
@@ -120,97 +131,32 @@ function onError(err)
 }
 ;
 
-function parseData(csv)
+function onMessageRecieved(msg)
 {
-    var numrows = csv.numrows;
-    var numcols = csv.numcols;
-    var labels = csv.getRow(0, 1);
-    var allData = new Array(numcols);
+    var dataStream = new DataStream(msg.data);
+    dataStream.endianness = dataStream.BIG_ENDIAN;
 
-    for (i = 0; i < numcols; i++)
+    //var dataCount = dataStream.readInt16(true);
+    var dateTime = [];
+    var data = [];
+    for (var i = 0; i < channelCount; i++)
     {
-        allData[i] = new Array(numrows - 1);
-        var row = csv.getCol(i, 1);
+        data.push([]);
+    }
 
-        for (j = 0; j < numrows - 1; j++)
+    while (!dataStream.isEof())
+    {
+        //dataStream.readCString(26);
+        dateTime.push(dataStream.readCString(26));
+        for (var i = 0; i < channelCount; i++)
         {
-            if (i === 0)
-            {
-                //var Milliseconds = row[j].substr(22);
-                allData[i][j] = splitTimeFromAny(row[j]);
-            }
-            else
-            {
-                allData[i][j] = parseFloat(row[j]);
-            }
-
+            data[i].push(dataStream.readFloat32(true));
         }
     }
-    var data = [];
-    for (var i = 1; i < allData.length; i++)
-    {
-        data.push(allData[i]);
-    }
 
-    return {data: data, dateTime: allData[0], label: labels};
+    onReadyFormingData({data: data, dateTime: dateTime});
 }
 ;
-
-function formURL(db_server, db_name, db_group, window, level)
-{
-    var url = 'http://ipecluster5.ipe.kit.edu/ADEI/ADEIWS/services/getdata.php?db_server=' + db_server
-            + '&db_name=' + db_name
-            + '&db_group=' + db_group
-            + '&db_mask=all'
-            + '&experiment=' + window
-            + '&window=0'
-            + '&resample=' + level
-            + '&format=csv';
-    return url;
-}
-;
-
-monthFormats = {
-    'Jan': 0,
-    'Feb': 1,
-    'Mar': 2,
-    'Apr': 3,
-    'May': 4,
-    'Jun': 5,
-    'Jul': 6,
-    'Aug': 7,
-    'Sep': 8,
-    'Oct': 9,
-    'Nov': 10,
-    'Dec': 11
-};
-
-splitTimeFromAny = function(window)
-{
-    var Microsec = window.substr(19);
-    //window = window.substring(0, 18);
-    var year = window.substr(7, 2);
-    var month = window.substr(3, 3);
-    var day = window.substr(0, 2);
-    var hour = window.substr(10, 2);
-    var minute = window.substr(13, 2);
-    var sec = window.substr(16, 2);
-    if (year > 60)
-    {
-        year = '19' + year;
-    }
-    else
-    {
-        year = '20' + year;
-    }
-    var d = new Date(year, monthFormats[month], day, hour, minute, sec);
-    var buf = d.toISOString().substr(13).substring(0, 7);
-    d.setMinutes(d.getMinutes() - d.getTimezoneOffset());
-    var Time = d.toISOString().substring(0, 13);
-    Time = Time + buf + Microsec;
-    return Time;
-};
-
 
 function formValues(data, i)
 {
@@ -225,3 +171,27 @@ function formValues(data, i)
 
 
 
+//У меня есть ежедневник, в котором все детально описано, планирование наше все:)
+//Эта проблема со всеми браузерами.
+//
+//Теперь самое интересное, начну с того, что расскажу сколько времени занимает HTTP GET. Прошу 2500 точек у локального сервера, это тоже надо учитывать:
+//1) Время ожидания ответа от сервера 205-215 ms с ресэмплингом
+//2) Время парсинга CSV 20-25 ms
+//Воткнул в php передачу бинарных данных, и те же самые условия, резултат:
+//1) Время ожидания ответа от сервера 100-105 ms без ресэмплинга
+//2) Время парсинга байтовых данных 1-2 ms (я опешил :D)
+//Теперь подведу небольшие итоги:
+//1) Кэширование через HTTP GET - не оптимизировал еще, там однозначно нужна оптимизация, так как я делаю дополнительные запросы на сервер:
+//1.1) О максимальном разрешении данных
+//1.2) Формировании маски
+//1.3) Так же форматирование пересылаемого времени достаточно долго(еще пока не знаю почему)
+//Результат: 95 процентов работы функций это время на http get(и это без запроса данных).
+//2) Кэширование через websockets binary data - тоже не оптимизировал еще, с ним такие же проблемы только чуть больше:
+//2.1) Прошу максимальное разрешение данных
+//2.2) Прошу Маску и Имена каналов(так сервер в этом случае присылает только данные)
+//2.3) Прошу имя таблицы у сервера, для нужного уровня данных, для передачи серверу на вебсокетах(эта штука нужна будет постоянно, а время ответа 30 - 40 ms, теперь начинаю сомневаться на счет сервера на C)
+//2.4) Прошу кэш конфиг(так как ты сказал, что мои уровни данных должны отражать кэш базы данных, поэтому я не хардкорю все это дело как в прошлый раз, а динамически задаю уровни данных для каждого источника)
+//Как результат, тоже самое что и выше. Скорее всего эти данные буду кэшировать, чтобы их можно было быстро достать, но просить имя таблицы придется каждый раз.
+//
+//Подведу небольшой итог: websockets на бинарных данных на первый взгляд лучше, посмотрим что дальше покажет. Да заметил такую очень интересную вещь, скорость ответа от сервера практически не влияет на работу модуля кэширования данных, она влият только при первом запросе - когда в модуле нету ни капли данных, все остальное вообще никак незаметно, просто второй поток чуть медленее будет кэшировать данные, на интерфейсе и на скорости это не отражается никак. Поэтому встает вопрос, стоит ли ради небольшого выйгрыша во времени с самого начала, использовать сервер на С, когда я это "выйгрышное" время буду тратить на получение названия таблицы мускула? Уже сомневаюсь больше.
+//
